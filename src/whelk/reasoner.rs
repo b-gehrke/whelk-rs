@@ -1,5 +1,8 @@
 use std::ops::Deref;
 use std::rc::Rc;
+use horned_owl::model::{AnnotatedComponent, ForIRI, MutableOntology};
+use horned_owl::ontology::set::SetOntology;
+use horned_owl::reasoner::Reasoner;
 
 use im::{hashmap, hashset, vector, HashMap, HashSet, Vector};
 use itertools::Itertools;
@@ -8,6 +11,7 @@ use crate::whelk::model::{
     AtomicConcept, Axiom, Complement, Concept, ConceptInclusion, Conjunction, Disjunction, Entity, ExistentialRestriction, HasSignature, QueueExpression, Role, RoleComposition,
     RoleInclusion, SelfRestriction, BOTTOM, TOP,
 };
+use crate::whelk::owl::translate_ontology;
 
 #[derive(Eq, PartialEq, Hash, Clone, Debug)]
 pub struct ReasonerState {
@@ -664,7 +668,7 @@ fn index_role_compositions(hier: &HashMap<Rc<Role>, HashSet<Rc<Role>>>, chains: 
                 hier.iter().flat_map(|(r2, s2s)| {
                     s2s.iter().flat_map(|s2| match role_comps.get(&(Rc::clone(s1), Rc::clone(s2))) {
                         Some(ss) => ss.iter().flat_map(|s| hashset![(Rc::clone(r1), Rc::clone(r2), Rc::clone(s))]).collect(),
-                        None => HashSet::new(),
+                        None => HashSet::<(Rc<Role>, Rc<Role>, Rc<Role>)>::new(),
                     })
                 })
             })
@@ -703,6 +707,83 @@ fn index_role_compositions(hier: &HashMap<Rc<Role>, HashSet<Rc<Role>>>, chains: 
     }
     hier_comps
 }
+
+pub struct Whelk<A: ForIRI> {
+    state: ReasonerState,
+    axioms: HashSet<Rc<Axiom>>,
+    ontology: Rc<SetOntology<A>>,
+}
+
+impl<A: ForIRI> Reasoner<A> for Whelk<A> {
+    type Error = String;
+
+    fn for_ontology<'a, O>(onto: &'a O) -> Self
+    where
+        &'a O: IntoIterator<Item=&'a AnnotatedComponent<A>>,
+        A: 'a
+    {
+        let mut set_ontology = SetOntology::<A>::new();
+
+        for x in onto {
+            set_ontology.insert(x.clone());
+        }
+
+        let transformed = Rc::new(set_ontology);
+
+        let whelk = Whelk {
+            ontology: transformed,
+            state: ReasonerState::empty(),
+            axioms: HashSet::new(),
+        };
+
+        return whelk;
+    }
+
+
+    fn classify(&mut self) -> Result<(), String> {
+        let o = self.ontology.deref();
+        self.axioms = translate_ontology(o);
+        self.state = assert(&self.axioms);
+
+        Ok(())
+    }
+
+    fn entails(&mut self, axiom: &horned_owl::model::Component<A>) -> Result<bool, String> {
+        todo!()
+    }
+
+    fn consistent(&mut self) -> Result<bool, String> {
+        let bottom = &self.state.bottom;
+
+        let subsumers = self.state.closure_subs_by_superclass.get(bottom);
+
+        Ok(subsumers.is_some())
+    }
+
+    fn inferred_axioms(&mut self) -> Result<Vec<horned_owl::model::Component<A>>, String> {
+        let state = &self.state;
+        let builder = horned_owl::model::Build::<A>::new();
+
+        let result = state.closure_subs_by_superclass.iter().filter_map(|(k, subs)|
+            match k.deref() {
+                Concept::AtomicConcept(sup) => Some(
+                    subs.iter().filter_map(|v|
+                        match v.deref() {
+                            Concept::AtomicConcept(sub) => Some(
+                                horned_owl::model::Component::SubClassOf(horned_owl::model::SubClassOf {
+                                    sub: horned_owl::model::ClassExpression::Class(horned_owl::model::Class(builder.iri(sub.id.clone()))),
+                                    sup: horned_owl::model::ClassExpression::Class(horned_owl::model::Class(builder.iri(sup.id.clone()))),
+                                })),
+                            _ => None
+                        })),
+                _ => None
+            }
+        ).flatten().collect();
+
+        Ok(result)
+    }
+}
+
 
 #[cfg(test)]
 mod test {

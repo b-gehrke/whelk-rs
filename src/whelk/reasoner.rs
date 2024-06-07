@@ -1,8 +1,10 @@
+use std::marker::PhantomData;
 use std::ops::Deref;
 use std::rc::Rc;
-use horned_owl::model::{AnnotatedComponent, ForIRI, MutableOntology};
+use horned_owl::model::{AnnotatedComponent, Component, ForIRI, MutableOntology};
+use horned_owl::ontology::indexed::{ForIndex, OntologyIndex};
 use horned_owl::ontology::set::SetOntology;
-use horned_owl::reasoner::Reasoner;
+use horned_owl::reasoner::{IncrementalReasoner, Reasoner};
 
 use im::{hashmap, hashset, vector, HashMap, HashSet, Vector};
 use itertools::Itertools;
@@ -11,7 +13,7 @@ use crate::whelk::model::{
     AtomicConcept, Axiom, Complement, Concept, ConceptInclusion, Conjunction, Disjunction, Entity, ExistentialRestriction, HasSignature, QueueExpression, Role, RoleComposition,
     RoleInclusion, SelfRestriction, BOTTOM, TOP,
 };
-use crate::whelk::owl::translate_ontology;
+use crate::whelk::owl::{translate_axiom, translate_axioms, translate_ontology};
 
 #[derive(Eq, PartialEq, Hash, Clone, Debug)]
 pub struct ReasonerState {
@@ -711,38 +713,39 @@ fn index_role_compositions(hier: &HashMap<Rc<Role>, HashSet<Rc<Role>>>, chains: 
 pub struct Whelk<A: ForIRI> {
     state: ReasonerState,
     axioms: HashSet<Rc<Axiom>>,
-    ontology: Rc<SetOntology<A>>,
+    phantom: PhantomData<A>,
+}
+
+impl<A: ForIRI> Whelk<A> {
+    pub fn new() -> Self {
+        Whelk {
+            state: ReasonerState::empty(),
+            axioms: Default::default(),
+            phantom: Default::default(),
+        }
+    }
+}
+
+impl<'a, A, AA, I> From<I> for Whelk<A>
+    where
+        A: ForIRI,
+        AA: ForIndex<A> + 'a,
+        I: IntoIterator<Item = &'a AA>,
+        <I as IntoIterator>::IntoIter: 'a
+{
+    fn from(value: I) -> Self {
+        let mut whelk = Whelk::new();
+        whelk.axioms.extend(translate_axioms(value));
+
+        whelk
+    }
 }
 
 impl<A: ForIRI> Reasoner<A> for Whelk<A> {
     type Error = String;
 
-    fn for_ontology<'a, O>(onto: &'a O) -> Self
-    where
-        &'a O: IntoIterator<Item=&'a AnnotatedComponent<A>>,
-        A: 'a
-    {
-        let mut set_ontology = SetOntology::<A>::new();
-
-        for x in onto {
-            set_ontology.insert(x.clone());
-        }
-
-        let transformed = Rc::new(set_ontology);
-
-        let whelk = Whelk {
-            ontology: transformed,
-            state: ReasonerState::empty(),
-            axioms: HashSet::new(),
-        };
-
-        return whelk;
-    }
-
 
     fn classify(&mut self) -> Result<(), String> {
-        let o = self.ontology.deref();
-        self.axioms = translate_ontology(o);
         self.state = assert(&self.axioms);
 
         Ok(())
@@ -760,30 +763,52 @@ impl<A: ForIRI> Reasoner<A> for Whelk<A> {
         Ok(subsumers.is_some())
     }
 
-    fn inferred_axioms(&mut self) -> Result<Vec<horned_owl::model::Component<A>>, String> {
+    fn inferred_axioms(&mut self) -> Result<impl Iterator<Item=Component<A>>, Self::Error>
+    {
         let state = &self.state;
-        let builder = horned_owl::model::Build::<A>::new();
 
-        let result = state.closure_subs_by_superclass.iter().filter_map(|(k, subs)|
-            match k.deref() {
-                Concept::AtomicConcept(sup) => Some(
-                    subs.iter().filter_map(|v|
-                        match v.deref() {
-                            Concept::AtomicConcept(sub) => Some(
-                                horned_owl::model::Component::SubClassOf(horned_owl::model::SubClassOf {
-                                    sub: horned_owl::model::ClassExpression::Class(horned_owl::model::Class(builder.iri(sub.id.clone()))),
-                                    sup: horned_owl::model::ClassExpression::Class(horned_owl::model::Class(builder.iri(sup.id.clone()))),
-                                })),
-                            _ => None
-                        })),
-                _ => None
+        let result = state.closure_subs_by_superclass.iter().flat_map(|(k, subs)|
+            {
+                let builder = horned_owl::model::Build::<A>::new();
+                match k.deref() {
+                    Concept::AtomicConcept(sup) => Some(
+                        subs.iter().filter_map(move |v|
+                            match v.deref() {
+                                Concept::AtomicConcept(sub) => Some(
+                                    horned_owl::model::Component::SubClassOf(horned_owl::model::SubClassOf {
+                                        sub: horned_owl::model::ClassExpression::Class(horned_owl::model::Class(builder.iri(sub.id.clone()))),
+                                        sup: horned_owl::model::ClassExpression::Class(horned_owl::model::Class(builder.iri(sup.id.clone()))),
+                                    })),
+                                _ => None
+                            })),
+                    _ => None
+                }
             }
-        ).flatten().collect();
+        ).flatten();
 
         Ok(result)
     }
 }
 
+impl<A: ForIRI, AA: ForIndex<A>> OntologyIndex<A, AA> for Whelk<A> {
+    fn index_insert(&mut self, cmp: AA) -> bool {
+        let c = cmp.unwrap().component;
+        let tc = translate_axiom(&c);
+        self.state = assert_append(&tc.into_iter().filter_map(|x| {
+            match x.deref() {
+                Axiom::ConceptInclusion(c) => Some(c.clone()),
+                Axiom::RoleInclusion(_) => None,
+                Axiom::RoleComposition(_) => None,
+            }
+        }).collect(), &self.state);
+
+        return false;
+    }
+
+    fn index_remove(&mut self, cmp: &AnnotatedComponent<A>) -> bool {
+        unimplemented!()
+    }
+}
 
 #[cfg(test)]
 mod test {
@@ -791,13 +816,16 @@ mod test {
     use crate::whelk::model as wm;
     use crate::whelk::model::TOP;
     use crate::whelk::owl::translate_ontology;
-    use crate::whelk::reasoner::assert;
-    use horned_owl::model::RcStr;
+    use crate::whelk::reasoner::{assert, Whelk};
+    use horned_owl::model::{AnnotatedComponent, ArcStr, RcStr};
     use horned_owl::ontology::set::SetOntology;
     use im::{HashMap, HashSet};
     use std::ops::Deref;
     use std::rc::Rc;
     use std::{error, fs, path};
+    use horned_owl::ontology::indexed::TwoIndexedOntology;
+    use horned_owl::ontology::iri_mapped::IRIMappedIndex;
+    use horned_owl::reasoner::Reasoner;
 
     fn load_test_ontologies(parent_path: &path::PathBuf) -> Result<(Option<SetOntology<RcStr>>, Option<SetOntology<RcStr>>, Option<SetOntology<RcStr>>), Box<dyn error::Error>> {
         let parent_name = parent_path.file_name().unwrap();

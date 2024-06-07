@@ -5,6 +5,7 @@ use horned_owl::ontology::set::SetOntology;
 use im::HashSet;
 use itertools::Itertools;
 use std::rc::Rc;
+use horned_owl::ontology::indexed::ForIndex;
 
 struct OWLGlobals {
     thing: Rc<wm::Concept>,
@@ -12,8 +13,7 @@ struct OWLGlobals {
 }
 
 pub fn translate_ontology<A: ForIRI>(ontology: &SetOntology<A>) -> HashSet<Rc<wm::Axiom>> {
-    let globals = make_globals();
-    ontology.iter().flat_map(|ann_axiom| translate_axiom_internal(&ann_axiom.component, &globals)).collect()
+    translate_axioms(ontology.iter()).collect()
 }
 
 fn make_globals() -> OWLGlobals {
@@ -21,6 +21,17 @@ fn make_globals() -> OWLGlobals {
         thing: Rc::new(wm::Concept::AtomicConcept(Rc::new(wm::AtomicConcept { id: wm::TOP.to_string() }))),
         nothing: Rc::new(wm::Concept::AtomicConcept(Rc::new(wm::AtomicConcept { id: wm::BOTTOM.to_string() }))),
     }
+}
+
+pub fn translate_axioms<'a, A, AA, I>(axioms: I) -> impl Iterator<Item=Rc<wm::Axiom>> + 'a
+    where
+        A: ForIRI,
+        AA: ForIndex<A> + 'a,
+        I: IntoIterator<Item=&'a AA>,
+        <I as IntoIterator>::IntoIter: 'a
+{
+    let globals = make_globals();
+    axioms.into_iter().flat_map(move |ann_axiom| translate_axiom_internal(&ann_axiom.unwrap().component, &globals))
 }
 
 pub fn translate_axiom<A: ForIRI>(axiom: &hm::Component<A>) -> HashSet<Rc<wm::Axiom>> {
@@ -88,17 +99,17 @@ fn translate_axiom_internal<A: ForIRI>(axiom: &hm::Component<A>, globals: &OWLGl
             translate_axiom_internal(&equivalence, globals).union(translate_axiom_internal(&disjointness, globals))
         }
         hm::Component::SubObjectPropertyOf(hm::SubObjectPropertyOf {
-            sub: hm::SubObjectPropertyExpression::ObjectPropertyExpression(hm::ObjectPropertyExpression::ObjectProperty(hm::ObjectProperty(sub))),
-            sup: hm::ObjectPropertyExpression::ObjectProperty(hm::ObjectProperty(sup)),
-        }) => {
+                                               sub: hm::SubObjectPropertyExpression::ObjectPropertyExpression(hm::ObjectPropertyExpression::ObjectProperty(hm::ObjectProperty(sub))),
+                                               sup: hm::ObjectPropertyExpression::ObjectProperty(hm::ObjectProperty(sup)),
+                                           }) => {
             let sub_role = Rc::new(wm::Role { id: sub.to_string() });
             let sup_role = Rc::new(wm::Role { id: sup.to_string() });
             HashSet::unit(Rc::new(wm::Axiom::RoleInclusion(Rc::new(wm::RoleInclusion { subproperty: sub_role, superproperty: sup_role }))))
         }
         hm::Component::SubObjectPropertyOf(hm::SubObjectPropertyOf {
-            sub: hm::SubObjectPropertyExpression::ObjectPropertyChain(props),
-            sup: hm::ObjectPropertyExpression::ObjectProperty(hm::ObjectProperty(sup)),
-        }) => {
+                                               sub: hm::SubObjectPropertyExpression::ObjectPropertyChain(props),
+                                               sup: hm::ObjectPropertyExpression::ObjectProperty(hm::ObjectProperty(sup)),
+                                           }) => {
             if props.iter().all(|p| match p {
                 hm::ObjectPropertyExpression::ObjectProperty(_) => true,
                 hm::ObjectPropertyExpression::InverseObjectProperty(_) => false,
@@ -221,10 +232,10 @@ fn translate_axiom_internal<A: ForIRI>(axiom: &hm::Component<A>, globals: &OWLGl
             })
             .collect(),
         hm::Component::ObjectPropertyAssertion(hm::ObjectPropertyAssertion {
-            ope: property_expression,
-            from: hm::Individual::Named(hm::NamedIndividual(axiom_subject)),
-            to: hm::Individual::Named(hm::NamedIndividual(axiom_target)),
-        }) => {
+                                                   ope: property_expression,
+                                                   from: hm::Individual::Named(hm::NamedIndividual(axiom_subject)),
+                                                   to: hm::Individual::Named(hm::NamedIndividual(axiom_target)),
+                                               }) => {
             let (subject, prop, target) = match property_expression {
                 hm::ObjectPropertyExpression::ObjectProperty(hm::ObjectProperty(prop)) => (axiom_subject, prop, axiom_target),
                 hm::ObjectPropertyExpression::InverseObjectProperty(hm::ObjectProperty(prop)) => (axiom_target, prop, axiom_subject),

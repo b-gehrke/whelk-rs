@@ -664,7 +664,7 @@ fn index_role_compositions(hier: &HashMap<Rc<Role>, HashSet<Rc<Role>>>, chains: 
                 hier.iter().flat_map(|(r2, s2s)| {
                     s2s.iter().flat_map(|s2| match role_comps.get(&(Rc::clone(s1), Rc::clone(s2))) {
                         Some(ss) => ss.iter().flat_map(|s| hashset![(Rc::clone(r1), Rc::clone(r2), Rc::clone(s))]).collect(),
-                        None => HashSet::new(),
+                        None => HashSet::<(Rc<Role>, Rc<Role>, Rc<Role>)>::new(),
                     })
                 })
             })
@@ -676,7 +676,7 @@ fn index_role_compositions(hier: &HashMap<Rc<Role>, HashSet<Rc<Role>>>, chains: 
             hier.get(&Rc::clone(s))
                 .unwrap()
                 .iter()
-                .filter(|super_s| super_s.deref() != s)
+                .filter(|super_s| *super_s != s)
                 .filter(|super_s| hier_comps_tuples.contains(&(Rc::clone(r1), Rc::clone(r2), Rc::clone(super_s))))
                 .flat_map(|super_s| hashset![(Rc::clone(r1), Rc::clone(r2), Rc::clone(super_s))])
                 .collect::<HashSet<(Rc<Role>, Rc<Role>, Rc<Role>)>>()

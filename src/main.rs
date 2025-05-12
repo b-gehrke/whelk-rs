@@ -36,7 +36,7 @@ fn main() -> Result<(), Box<dyn error::Error>> {
     debug!("whelk_axioms.len(): {}", whelk_axioms.len());
 
     let start_reason = time::Instant::now();
-    let whelk = assert(&whelk_axioms);
+    let _whelk = assert(&whelk_axioms);
     debug!("Reasoned in {}s", start_reason.elapsed().as_secs());
     // for (sub, sup) in whelk.named_subsumptions() {
     //     println!("{}\t{}", sub.id, sup.id);

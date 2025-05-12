@@ -13,7 +13,7 @@ struct OWLGlobals {
 
 pub fn translate_ontology<A: ForIRI>(ontology: &SetOntology<A>) -> HashSet<Rc<wm::Axiom>> {
     let globals = make_globals();
-    ontology.iter().flat_map(|ann_axiom| translate_axiom_internal(&ann_axiom.axiom, &globals)).collect()
+    ontology.iter().flat_map(|ann_axiom| translate_axiom_internal(&ann_axiom.component, &globals)).collect()
 }
 
 fn make_globals() -> OWLGlobals {
@@ -23,26 +23,26 @@ fn make_globals() -> OWLGlobals {
     }
 }
 
-pub fn translate_axiom<A: ForIRI>(axiom: &hm::Axiom<A>) -> HashSet<Rc<wm::Axiom>> {
+pub fn translate_axiom<A: ForIRI>(axiom: &hm::Component<A>) -> HashSet<Rc<wm::Axiom>> {
     translate_axiom_internal(axiom, &make_globals())
 }
 
-fn translate_axiom_internal<A: ForIRI>(axiom: &hm::Axiom<A>, globals: &OWLGlobals) -> HashSet<Rc<wm::Axiom>> {
+fn translate_axiom_internal<A: ForIRI>(axiom: &hm::Component<A>, globals: &OWLGlobals) -> HashSet<Rc<wm::Axiom>> {
     match axiom {
-        hm::Axiom::DeclareClass(hm::DeclareClass(hm::Class(iri))) => {
+        hm::Component::DeclareClass(hm::DeclareClass(hm::Class(iri))) => {
             let subclass = Rc::new(wm::Concept::AtomicConcept(Rc::new(wm::AtomicConcept { id: iri.to_string() })));
             HashSet::unit(concept_inclusion(&subclass, &globals.thing))
         }
-        hm::Axiom::DeclareNamedIndividual(hm::DeclareNamedIndividual(hm::NamedIndividual(iri))) => {
+        hm::Component::DeclareNamedIndividual(hm::DeclareNamedIndividual(hm::NamedIndividual(iri))) => {
             let individual = Rc::new(wm::Individual { id: iri.to_string() });
             let subclass = Rc::new(wm::Concept::Nominal(Rc::new(wm::Nominal { individual })));
             HashSet::unit(concept_inclusion(&subclass, &globals.thing))
         }
-        hm::Axiom::SubClassOf(ax) => match (convert_expression(&ax.sub), convert_expression(&ax.sup)) {
+        hm::Component::SubClassOf(ax) => match (convert_expression(&ax.sub), convert_expression(&ax.sup)) {
             (Some(subclass), Some(superclass)) => HashSet::unit(concept_inclusion(&subclass, &superclass)),
             _ => Default::default(),
         },
-        hm::Axiom::EquivalentClasses(hm::EquivalentClasses(expressions)) => expressions
+        hm::Component::EquivalentClasses(hm::EquivalentClasses(expressions)) => expressions
             .iter()
             .filter_map(|c| convert_expression(&c))
             .combinations(2)
@@ -64,7 +64,7 @@ fn translate_axiom_internal<A: ForIRI>(axiom: &hm::Axiom<A>, globals: &OWLGlobal
                 }
             })
             .collect(),
-        hm::Axiom::DisjointClasses(hm::DisjointClasses(operands)) => operands
+        hm::Component::DisjointClasses(hm::DisjointClasses(operands)) => operands
             .iter()
             .map(|c| convert_expression(c))
             .filter_map(|opt| opt)
@@ -81,13 +81,13 @@ fn translate_axiom_internal<A: ForIRI>(axiom: &hm::Axiom<A>, globals: &OWLGlobal
                 }
             })
             .collect(),
-        hm::Axiom::DisjointUnion(hm::DisjointUnion(cls, expressions)) => {
+        hm::Component::DisjointUnion(hm::DisjointUnion(cls, expressions)) => {
             let union = hm::ClassExpression::ObjectUnionOf(expressions.clone());
-            let equivalence = hm::Axiom::EquivalentClasses(hm::EquivalentClasses(vec![hm::ClassExpression::Class(cls.clone()), union]));
-            let disjointness = hm::Axiom::DisjointClasses(hm::DisjointClasses(expressions.clone()));
+            let equivalence = hm::Component::EquivalentClasses(hm::EquivalentClasses(vec![hm::ClassExpression::Class(cls.clone()), union]));
+            let disjointness = hm::Component::DisjointClasses(hm::DisjointClasses(expressions.clone()));
             translate_axiom_internal(&equivalence, globals).union(translate_axiom_internal(&disjointness, globals))
         }
-        hm::Axiom::SubObjectPropertyOf(hm::SubObjectPropertyOf {
+        hm::Component::SubObjectPropertyOf(hm::SubObjectPropertyOf {
             sub: hm::SubObjectPropertyExpression::ObjectPropertyExpression(hm::ObjectPropertyExpression::ObjectProperty(hm::ObjectProperty(sub))),
             sup: hm::ObjectPropertyExpression::ObjectProperty(hm::ObjectProperty(sup)),
         }) => {
@@ -95,7 +95,7 @@ fn translate_axiom_internal<A: ForIRI>(axiom: &hm::Axiom<A>, globals: &OWLGlobal
             let sup_role = Rc::new(wm::Role { id: sup.to_string() });
             HashSet::unit(Rc::new(wm::Axiom::RoleInclusion(Rc::new(wm::RoleInclusion { subproperty: sub_role, superproperty: sup_role }))))
         }
-        hm::Axiom::SubObjectPropertyOf(hm::SubObjectPropertyOf {
+        hm::Component::SubObjectPropertyOf(hm::SubObjectPropertyOf {
             sub: hm::SubObjectPropertyExpression::ObjectPropertyChain(props),
             sup: hm::ObjectPropertyExpression::ObjectProperty(hm::ObjectProperty(sup)),
         }) => {
@@ -108,7 +108,7 @@ fn translate_axiom_internal<A: ForIRI>(axiom: &hm::Axiom<A>, globals: &OWLGlobal
                     0 => Default::default(),
                     1 => {
                         let sub = props.get(0).unwrap().clone();
-                        let axiom = hm::Axiom::SubObjectPropertyOf(hm::SubObjectPropertyOf {
+                        let axiom = hm::Component::SubObjectPropertyOf(hm::SubObjectPropertyOf {
                             sub: hm::SubObjectPropertyExpression::ObjectPropertyExpression(sub),
                             sup: hm::ObjectPropertyExpression::ObjectProperty(hm::ObjectProperty(sup.clone())),
                         });
@@ -130,7 +130,7 @@ fn translate_axiom_internal<A: ForIRI>(axiom: &hm::Axiom<A>, globals: &OWLGlobal
                                 let comp_iri = hm::Build::new().iri(composition_property_id);
                                 let composition_property = hm::ObjectPropertyExpression::ObjectProperty(hm::ObjectProperty(comp_iri));
                                 let beginning_chain = translate_axiom_internal(
-                                    &hm::Axiom::SubObjectPropertyOf(hm::SubObjectPropertyOf {
+                                    &hm::Component::SubObjectPropertyOf(hm::SubObjectPropertyOf {
                                         sub: hm::SubObjectPropertyExpression::ObjectPropertyChain(vec![
                                             hm::ObjectPropertyExpression::ObjectProperty(hm::ObjectProperty(first_id.clone())),
                                             hm::ObjectPropertyExpression::ObjectProperty(hm::ObjectProperty(second_id.clone())),
@@ -144,7 +144,7 @@ fn translate_axiom_internal<A: ForIRI>(axiom: &hm::Axiom<A>, globals: &OWLGlobal
                                 new_chain.remove(0);
                                 new_chain.insert(0, composition_property);
                                 let rest_of_chain = translate_axiom_internal(
-                                    &hm::Axiom::SubObjectPropertyOf(hm::SubObjectPropertyOf {
+                                    &hm::Component::SubObjectPropertyOf(hm::SubObjectPropertyOf {
                                         sub: hm::SubObjectPropertyExpression::ObjectPropertyChain(new_chain),
                                         sup: hm::ObjectPropertyExpression::ObjectProperty(hm::ObjectProperty(sup.clone())),
                                     }),
@@ -160,7 +160,7 @@ fn translate_axiom_internal<A: ForIRI>(axiom: &hm::Axiom<A>, globals: &OWLGlobal
                 Default::default()
             }
         }
-        hm::Axiom::EquivalentObjectProperties(hm::EquivalentObjectProperties(props)) => props
+        hm::Component::EquivalentObjectProperties(hm::EquivalentObjectProperties(props)) => props
             .iter()
             .combinations(2)
             .flat_map(|pair| {
@@ -168,13 +168,13 @@ fn translate_axiom_internal<A: ForIRI>(axiom: &hm::Axiom<A>, globals: &OWLGlobal
                 let second_opt = pair.get(1);
                 match (first_opt, second_opt) {
                     (Some(first), Some(second)) => {
-                        let first_second = hm::Axiom::SubObjectPropertyOf(hm::SubObjectPropertyOf {
-                            sub: hm::SubObjectPropertyExpression::ObjectPropertyExpression(first.clone().clone()),
-                            sup: second.clone().clone(),
+                        let first_second = hm::Component::SubObjectPropertyOf(hm::SubObjectPropertyOf {
+                            sub: hm::SubObjectPropertyExpression::ObjectPropertyExpression((*first).clone()),
+                            sup: (*second).clone(),
                         });
-                        let second_first = hm::Axiom::SubObjectPropertyOf(hm::SubObjectPropertyOf {
-                            sub: hm::SubObjectPropertyExpression::ObjectPropertyExpression(second.clone().clone()),
-                            sup: first.clone().clone(),
+                        let second_first = hm::Component::SubObjectPropertyOf(hm::SubObjectPropertyOf {
+                            sub: hm::SubObjectPropertyExpression::ObjectPropertyExpression((*second).clone()),
+                            sup: (*first).clone(),
                         });
                         translate_axiom_internal(&first_second, globals).union(translate_axiom_internal(&second_first, globals))
                     }
@@ -182,7 +182,7 @@ fn translate_axiom_internal<A: ForIRI>(axiom: &hm::Axiom<A>, globals: &OWLGlobal
                 }
             })
             .collect(),
-        hm::Axiom::ObjectPropertyDomain(hm::ObjectPropertyDomain { ope: hm::ObjectPropertyExpression::ObjectProperty(hm::ObjectProperty(prop)), ce: cls }) => {
+        hm::Component::ObjectPropertyDomain(hm::ObjectPropertyDomain { ope: hm::ObjectPropertyExpression::ObjectProperty(hm::ObjectProperty(prop)), ce: cls }) => {
             convert_expression(cls)
                 .iter()
                 .map(|c| {
@@ -194,25 +194,25 @@ fn translate_axiom_internal<A: ForIRI>(axiom: &hm::Axiom<A>, globals: &OWLGlobal
                 })
                 .collect()
         }
-        // hm::Axiom::ObjectPropertyRange(_) => {} //TODO
-        // hm::Axiom::DisjointObjectProperties(_) => {}
-        // hm::Axiom::InverseObjectProperties(_) => {}
-        // hm::Axiom::FunctionalObjectProperty(_) => {}
-        // hm::Axiom::InverseFunctionalObjectProperty(_) => {}
-        // hm::Axiom::ReflexiveObjectProperty(_) => {}
-        // hm::Axiom::IrreflexiveObjectProperty(_) => {}
-        // hm::Axiom::SymmetricObjectProperty(_) => {}
-        // hm::Axiom::AsymmetricObjectProperty(_) => {}
-        hm::Axiom::TransitiveObjectProperty(hm::TransitiveObjectProperty(prop)) => translate_axiom_internal(
-            &hm::Axiom::SubObjectPropertyOf(hm::SubObjectPropertyOf {
+        // hm::Component::ObjectPropertyRange(_) => {} //TODO
+        // hm::Component::DisjointObjectProperties(_) => {}
+        // hm::Component::InverseObjectProperties(_) => {}
+        // hm::Component::FunctionalObjectProperty(_) => {}
+        // hm::Component::InverseFunctionalObjectProperty(_) => {}
+        // hm::Component::ReflexiveObjectProperty(_) => {}
+        // hm::Component::IrreflexiveObjectProperty(_) => {}
+        // hm::Component::SymmetricObjectProperty(_) => {}
+        // hm::Component::AsymmetricObjectProperty(_) => {}
+        hm::Component::TransitiveObjectProperty(hm::TransitiveObjectProperty(prop)) => translate_axiom_internal(
+            &hm::Component::SubObjectPropertyOf(hm::SubObjectPropertyOf {
                 sub: hm::SubObjectPropertyExpression::ObjectPropertyChain(vec![prop.clone(), prop.clone()]),
                 sup: prop.clone(),
             }),
             globals,
         ),
-        // hm::Axiom::SameIndividual(_) => {} //TODO
-        // hm::Axiom::DifferentIndividuals(_) => {} //TODO
-        hm::Axiom::ClassAssertion(hm::ClassAssertion { ce: cls, i: hm::Individual::Named(hm::NamedIndividual(ind)) }) => convert_expression(cls)
+        // hm::Component::SameIndividual(_) => {} //TODO
+        // hm::Component::DifferentIndividuals(_) => {} //TODO
+        hm::Component::ClassAssertion(hm::ClassAssertion { ce: cls, i: hm::Individual::Named(hm::NamedIndividual(ind)) }) => convert_expression(cls)
             .iter()
             .flat_map(|superclass| {
                 let individual = Rc::new(wm::Individual { id: ind.to_string() });
@@ -220,7 +220,7 @@ fn translate_axiom_internal<A: ForIRI>(axiom: &hm::Axiom<A>, globals: &OWLGlobal
                 HashSet::unit(concept_inclusion(&subclass, superclass))
             })
             .collect(),
-        hm::Axiom::ObjectPropertyAssertion(hm::ObjectPropertyAssertion {
+        hm::Component::ObjectPropertyAssertion(hm::ObjectPropertyAssertion {
             ope: property_expression,
             from: hm::Individual::Named(hm::NamedIndividual(axiom_subject)),
             to: hm::Individual::Named(hm::NamedIndividual(axiom_target)),
@@ -235,17 +235,17 @@ fn translate_axiom_internal<A: ForIRI>(axiom: &hm::Axiom<A>, globals: &OWLGlobal
                 Rc::new(wm::Concept::ExistentialRestriction(Rc::new(wm::ExistentialRestriction { role: Rc::new(wm::Role { id: prop.to_string() }), concept: target_nominal })));
             HashSet::unit(concept_inclusion(&subclass, &superclass))
         }
-        // hm::Axiom::NegativeObjectPropertyAssertion(_) => {} //TODO
-        // hm::Axiom::SubDataPropertyOf(_) => {}
-        // hm::Axiom::EquivalentDataProperties(_) => {}
-        // hm::Axiom::DisjointDataProperties(_) => {}
-        // hm::Axiom::DataPropertyDomain(_) => {}
-        // hm::Axiom::DataPropertyRange(_) => {}
-        // hm::Axiom::FunctionalDataProperty(_) => {}
-        // hm::Axiom::DatatypeDefinition(_) => {}
-        // hm::Axiom::HasKey(_) => {}
-        // hm::Axiom::DataPropertyAssertion(_) => {}
-        // hm::Axiom::NegativeDataPropertyAssertion(_) => {}
+        // hm::Component::NegativeObjectPropertyAssertion(_) => {} //TODO
+        // hm::Component::SubDataPropertyOf(_) => {}
+        // hm::Component::EquivalentDataProperties(_) => {}
+        // hm::Component::DisjointDataProperties(_) => {}
+        // hm::Component::DataPropertyDomain(_) => {}
+        // hm::Component::DataPropertyRange(_) => {}
+        // hm::Component::FunctionalDataProperty(_) => {}
+        // hm::Component::DatatypeDefinition(_) => {}
+        // hm::Component::HasKey(_) => {}
+        // hm::Component::DataPropertyAssertion(_) => {}
+        // hm::Component::NegativeDataPropertyAssertion(_) => {}
         _ => Default::default(),
     }
 }

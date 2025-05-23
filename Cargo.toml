@@ -9,7 +9,8 @@ curie = "^0.1"
 clap = { version = "^4.1", features = ["derive"] }
 env_logger = "^0.10"
 #horned-functional = "^0.4"
-horned-owl = "^1.0"
+#horned-owl = "^1.0"
+horned-owl = { git = "https://github.com/phillord/horned-owl", branch = "devel" }
 humantime = "^2.0"
 im = "^15.1"
 itertools = "^0.10"

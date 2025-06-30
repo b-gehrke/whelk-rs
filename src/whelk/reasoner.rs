@@ -31,6 +31,13 @@ pub struct ReasonerState {
     bottom: Rc<Concept>,
 }
 
+impl Default for ReasonerState {
+    fn default() -> Self {
+        Self::empty()
+    }
+}
+
+
 impl ReasonerState {
     fn empty() -> ReasonerState {
         ReasonerState {
